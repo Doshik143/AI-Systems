@@ -1,0 +1,5 @@
+Категорія,Модель/Варіант,Параметри,Контекст,Кількість шарів,Розмірність (embed),val_loss,Accuracy,F1 (macro)
+mini-GPT,minigpt_v1_small,~2.9M,64,4,128,6.149,-,-
+mini-GPT,minigpt_v2_medium,"~8,9M",128,6,256,6.59,-,-
+NLP Pipeline (Sentiment),tabularisai/multilingual-sentiment-analysis,~278M,-,-,-,-,0.8,0.8
+NLP Pipeline (Sentiment),cardiffnlp/twitter-xlm-roberta-base-sentiment,~278M,-,-,-,-,1.0,1.0
