@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Адвокат диявола</title>
+  <style>
+    :root { --bg: #0f0f0f; --card: #1a1a1a; --text: #e8e8e8; --muted: #888; --accent: #d64545; --border: #2a2a2a; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.6rem; margin-bottom: 4px; }
+    .subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 24px; }
+    .container { width: 100%; max-width: 720px; }
+    textarea { width: 100%; min-height: 90px; padding: 12px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 1rem; resize: vertical; font-family: inherit; }
+    textarea:focus { outline: none; border-color: var(--accent); }
+    .controls { display: flex; gap: 12px; margin-top: 12px; align-items: center; }
+    button { padding: 10px 20px; background: var(--accent); color: white; border: none; border-radius: 8px; font-size: 1rem; cursor: pointer; font-weight: 600; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.secondary { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+    .status { color: var(--muted); font-size: 0.85rem; margin-left: auto; }
+    .answer { margin-top: 24px; padding: 16px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; min-height: 80px; white-space: pre-wrap; line-height: 1.6; display: none; }
+    .answer.visible { display: block; }
+    .answer .label { color: var(--accent); font-size: 0.8rem; font-weight: 600; text-transform: uppercase; margin-bottom: 8px; }
+    .error { color: #ff6b6b; background: #2a1515; border-color: #4a2020; }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .examples { margin-top: 20px; }
+    .examples p { color: var(--muted); font-size: 0.85rem; margin-bottom: 8px; }
+    .example-chip { display: inline-block; padding: 6px 12px; background: var(--card); border: 1px solid var(--border); border-radius: 16px; font-size: 0.85rem; cursor: pointer; margin: 0 6px 6px 0; color: var(--text); }
+    .example-chip:hover { border-color: var(--accent); }
+  </style>
+</head>
+<body>
+  <h1>😈 Адвокат диявола</h1>
+  <p class="subtitle">Введи свою тезу — модель знайде дірку в логіці</p>
+
+  <div class="container">
+    <textarea id="input" placeholder="Наприклад: Я почну робити лабу завтра вранці, бо зараз мозок вже не варить"></textarea>
+
+    <div class="controls">
+      <button id="send">Атакувати</button>
+      <button id="clear" class="secondary">Очистити</button>
+      <span class="status" id="status"></span>
+    </div>
+
+    <div class="examples">
+      <p>Спробуй приклад:</p>
+      <span class="example-chip">Я почну завтра вранці</span>
+      <span class="example-chip">Я вже вклав 3 дні, тому не мінятиму архітектуру</span>
+      <span class="example-chip">Мені не потрібно тестувати, він же простий</span>
+    </div>
+
+    <div class="answer" id="answer">
+      <div class="label">Критика</div>
+      <div id="answerText"></div>
+    </div>
+  </div>
+
+  <script>
+    const API_URL = "http://localhost:11434/v1/chat/completions";
+    const MODEL = "qwen3:1.7b-q8_0";
+
+    const SYSTEM_PROMPT = `Ти — критик. На тезу користувача відповідай рівно трьома рядками:
+1) Дірка: <одне слабке місце в логіці>
+2) Якщо так: <найгірший конкретний наслідок>
+3) Але: <один жорсткий контр-аргумент>
+Без вітань. Мовою тези. Максимум 60 слів.
+
+Приклад:
+Теза: «Я почну завтра».
+1) Дірка: «завтра» — це та сама відмова, лише відкладена.
+2) Якщо так: вранці знайдеться нова причина, і дедлайн прийде без роботи.
+3) Але: ти вже знаєш, що не почнеш — визнай це зараз і зроби 15 хвилин сьогодні.`;
+
+    const input = document.getElementById("input");
+    const sendBtn = document.getElementById("send");
+    const clearBtn = document.getElementById("clear");
+    const statusEl = document.getElementById("status");
+    const answerEl = document.getElementById("answer");
+    const answerTextEl = document.getElementById("answerText");
+
+    document.querySelectorAll(".example-chip").forEach(chip => {
+      chip.addEventListener("click", () => { input.value = chip.textContent; input.focus(); });
+    });
+
+    clearBtn.addEventListener("click", () => {
+      input.value = "";
+      answerEl.classList.remove("visible", "error");
+      statusEl.textContent = "";
+    });
+
+    async function attack() {
+      const thesis = input.value.trim();
+      if (!thesis) { input.focus(); return; }
+
+      sendBtn.disabled = true;
+      answerEl.classList.remove("error");
+      answerEl.classList.add("visible");
+      answerTextEl.textContent = "";
+      statusEl.innerHTML = '<span class="spinner"></span>Модель думає…';
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 180000);
+      const startTime = performance.now();
+
+      try {
+        const response = await fetch(API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer local" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            model: MODEL,
+            messages: [
+              { role: "system", content: SYSTEM_PROMPT },
+              { role: "user", content: thesis }
+            ],
+            max_tokens: 300,
+            temperature: 0.3,
+            reasoning_effort: "none",
+            stream: true
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Сервер відповів ${response.status}: ${response.statusText}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let gotAny = false;
+        statusEl.textContent = "Генерую…";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split(/\r?\n/);
+          buffer = lines.pop();
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            let payload = null;
+            if (trimmed.startsWith("data:")) {
+              payload = trimmed.slice(5).trim();
+            } else if (trimmed.startsWith("{")) {
+              payload = trimmed;
+            }
+            if (!payload || payload === "[DONE]") continue;
+            try {
+              const json = JSON.parse(payload);
+              const delta = json.choices?.[0]?.delta?.content;
+              const nativeMsg = json.message?.content;
+              const chunk = delta || nativeMsg;
+              if (chunk) {
+                answerTextEl.textContent += chunk;
+                gotAny = true;
+              }
+            } catch (e) {
+              console.warn("Не вдалося розпарсити рядок:", trimmed, e);
+            }
+          }
+        }
+
+        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+
+        if (!gotAny) {
+          answerEl.classList.add("error");
+          answerTextEl.textContent = "⚠️ Модель не повернула жодного токена. Перевір консоль (F12), що приходить у відповіді.";
+          statusEl.textContent = "";
+        } else {
+          statusEl.textContent = `Готово (${elapsed} с)`;
+        }
+      } catch (err) {
+        answerEl.classList.add("error");
+        if (err.name === "AbortError") {
+          answerTextEl.textContent = "⏱ Таймаут: модель не встигла відповісти за 3 хвилини.";
+        } else if (err.message.includes("Failed to fetch") || err.message.includes("NetworkError")) {
+          answerTextEl.textContent = `🔌 Не вдалося з'єднатися з Ollama.\n\nПеревір:\n1. Чи запущено ollama serve з OLLAMA_ORIGINS=*\n2. Чи виконано: ollama pull ${MODEL}`;
+        } else {
+          answerTextEl.textContent = `❌ Помилка: ${err.message}`;
+        }
+        statusEl.textContent = "";
+        console.error(err);
+      } finally {
+        clearTimeout(timeout);
+        sendBtn.disabled = false;
+      }
+    }
+
+    sendBtn.addEventListener("click", attack);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) attack();
+    });
+  </script>
+</body>
+</html>
